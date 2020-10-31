@@ -1,0 +1,15 @@
+withinSS <- 0
+betweenSS <- 0
+for(sample in unique(residDF$sample)){
+  print(sample)
+  subsetDat <- residDF[which(residDF$sample == sample),]
+  #print(subsetDat)
+  withinSS <- withinSS + sum((subsetDat$regResiduals - mean(subsetDat$regResiduals))^2)
+  #print(withinSS)
+  betweenSS <- betweenSS + nrow(subsetDat)*(mean(subsetDat$regResiduals) - mean(residDF$regResiduals))^2
+  print(mean(subsetDat$regResiduals)^2)
+}
+withinSS
+betweenSS
+sum((residDF$regResiduals - mean(residDF$regResiduals))^2) #SST
+var(residDF$regResiduals)*(length(residDF$regResiduals)-1) #SST

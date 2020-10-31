@@ -1,0 +1,165 @@
+load("/homes6/mquinn/chipseqRScripts/data_peaks_simulated_DB_GSE57632.rda")
+load("/homes6/mquinn/chipseqRScripts/permutation_test_balanced_results_simulated_DB_GSE57632.rda")
+candidateRegions <- metadata(experiment)$regions
+
+cell_line <- factor(c(1,2,1,2))
+status <- factor(c("Treatment",  "Treatment", "Simulated", "Simulated"))
+status <- relevel(status, ref=toString(unique(status)[1]))
+#fakeVar <- c(1.25, 1.50, 1.75, 2.00)
+sampleSheet <- data.frame(cell_line, status)
+#sampleSheet <- data.frame(cell_line, status, fakeVar)
+
+
+
+blacklist <- read.table('/homes6/mquinn/chipseqRScripts/hg19-blacklist.v2.bed',
+                        header=FALSE,sep='\t',stringsAsFactors=F)
+blacklist <- GRanges(blacklist$V1,IRanges(blacklist$V2,blacklist$V3),group=blacklist$V4)
+
+library(PermTestDB)
+# experiment <- dbList(sampleSheet = sampleSheet,
+#                      counts=simDat,
+#                      condition="status",
+#                      block="cell_line",
+#                      ranges=rowRanges(data),
+#                      blacklist=blackpeaks)
+
+#assay(data) <- simDat
+
+experiment <- formatExperiment(assay=simDat, rowRanges=rowRanges(data),
+                               sampleSheet=sampleSheet, blacklist=blacklist,
+                               expCondition = "status", block = "cell_line")
+#experiment <- formatExperiment(assay=simDat, rowRanges=rowRanges(data),
+#                               sampleSheet=sampleSheet, blacklist=blacklist,
+#                               expCondition = "status", block = "cell_line", covariates=("fakeVar"))
+experiment
+head(assay(experiment))
+rowRanges(experiment)
+colData(experiment)
+
+experiment <- getRegions(experiment, lower=0.015, upper=0.985, thresholdType="percentile", minWidth = median(width(rowRanges(experiment))) + 1, maxGap=600)
+
+#metadata(experiment)$condition <- "status"
+#metadata(experiment)$block <- "cell_line"
+#metadata(experiment)$covariates <- c("fakeVar")
+
+experiment <- getRegions(experiment, lower=0.015, upper=0.985, thresholdType="percentile", minWidth = median(width(rowRanges(experiment))) + 1, maxGap=600)
+
+metadata(experiment)$lower
+metadata(experiment)$upper
+metadata(experiment)$thresholdType
+metadata(experiment)$minWidth
+metadata(experiment)$maxGap
+
+metadata(experiment)$regions
+metadata(experiment)$regionsBins
+
+
+#Compare results from package to previous script
+metadata(experiment)$regions
+candidateRegions
+setdiff(metadata(experiment)$regions, candidateRegions) #Should be empty
+
+#Check that the bin indices are record correctly
+head(metadata(experiment)$regionsBins)
+findOverlaps(rowRanges(experiment), metadata(experiment)$regions[1], type="within")
+findOverlaps(rowRanges(experiment), metadata(experiment)$regions[2], type="within")
+findOverlaps(rowRanges(experiment), metadata(experiment)$regions[3], type="within")
+tail(metadata(experiment)$regionsBins)
+findOverlaps(metadata(experiment)$regions, metadata(experiment)$regions[length(metadata(experiment)$regions)], type="within")
+
+#Transform counts
+head(assay(experiment))
+experiment <- transformCounts(experiment)
+head(metadata(experiment)$transformedCounts)
+
+head(log(simDat + 0.5))
+
+
+#Check if observed results work
+system.time({
+  temp1 <- getObservedResults(experiment, verbose=T, includeBetas = T)
+})
+system.time(
+  temp2 <- getObservedResults(experiment, numCores = 4, verbose=T, includeBetas = T)
+)
+
+#Check that results are consistent
+metadata(temp1)$regions
+metadata(temp2)$regions
+candidateRegions
+which(is.na(metadata(temp1)$regions$beta))
+
+#Following line doesn't need to be included, it's done by permutationTest()
+#experiment <- getObservedResults(experiment, serial=F, numCores = 4, verbose=T)
+
+permutations <- getPermutations(experiment, permutationType = "balanced")
+
+experiment <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = T, numCores = 4, verbose = T)
+
+metadata(experiment)$regions
+candidateRegions
+
+
+
+
+
+#Testing out package with 6 vs 6 experiment.
+load("/homes6/mquinn/chipseqRScripts/data_peaks_simulated_DB_GSE68952.rda")
+load("/homes6/mquinn/chipseqRScripts/permutation_test_balanced_results_simulated_DB_GSE68952.rda")
+candidateRegions <- metadata(experiment)$regions
+
+cell_line <- factor(c(1,2,3,4,5,6,1,2,3,4,5,6))
+status <- factor(c(rep("Control",6), rep("Simulated",6)))
+status <- relevel(status, ref=toString(unique(status)[1]))
+#fakeVar1 <- c(1.25, 1.50, 1.75, 2.00, 2.25, 2.50, 2.00, 2.75, 3.00, 3.25, 3.50, 3.00)
+#fakeVar2 <- c(0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0)
+sampleSheet <- data.frame(cbind(cell_line, status))
+#sampleSheet <- data.frame(cell_line, status, fakeVar1, fakeVar2)
+
+
+blacklist <- read.table('/homes6/mquinn/chipseqRScripts/hg19-blacklist.v2.bed',
+                        header=FALSE,sep='\t',stringsAsFactors=F)
+blacklist <- GRanges(blacklist$V1,IRanges(blacklist$V2,blacklist$V3),group=blacklist$V4)
+
+library(PermBindDB)
+
+experiment <- formatExperiment(assay=simDat, rowRanges=rowRanges(data),
+                               sampleSheet=sampleSheet, blacklist=blacklist,
+                               expCondition = "status", block = "cell_line")
+#experiment <- formatExperiment(assay=simDat, rowRanges=rowRanges(data),
+#                               sampleSheet=sampleSheet, blacklist=blacklist,
+#                               expCondition = "status", block = "cell_line", covariates=c("fakeVar1", "fakeVar2"))
+
+#Using lower=0.25 matches candidateRegions from previous script, gives about 16000 regions.
+experiment <- getRegions(experiment, lower=0.25, upper=0.75, thresholdType="percentile", minWidth = median(width(rowRanges(experiment))) + 1, maxGap=600)
+
+experiment <- transformCounts(experiment)
+
+permutations <- getPermutations(experiment, permutationType = "balanced", numCores = 1)
+
+system.time({
+  experiment1 <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = T, verbose = T)
+})
+
+system.time({
+  experiment2 <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = T, numCores = 2, verbose = T)
+})
+
+system.time({
+  experiment4 <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = T, numCores = 4, verbose = T)
+})
+
+system.time({
+  experiment8 <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = T, numCores = 8, verbose = T)
+})
+metadata(experiment1)$regions
+candidateRegions
+
+metadata(experiment4)$regions
+
+
+#Same as above but without betas included.
+experiment2 <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = F, serial = F, numCores = 4, verbose = T)
+
+metadata(experiment1)$regions
+metadata(experiment2)$regions

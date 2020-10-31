@@ -1,0 +1,13 @@
+{
+    "path" : "~/chipseqRScripts/PermTestDB/R",
+    "sortOrder" : [
+        {
+            "ascending" : true,
+            "columnIndex" : 2
+        },
+        {
+            "ascending" : false,
+            "columnIndex" : 4
+        }
+    ]
+}

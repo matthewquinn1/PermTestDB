@@ -1,0 +1,445 @@
+setwd("/homes6/mquinn/chipseqRScripts")
+getwd()
+
+
+#BiocManager::install("csaw")
+library(csaw)
+library(GenomicRanges)
+library(rtracklayer)
+library(liftOver)
+library(DiffBind)
+
+#Record the bam files for a particular experiment.
+#Taking the neurologically normal lines (i.e. rather than those
+#with Huntington's disease where binding is downregulated) for the GSE68952.
+bam.files <- c("/xplatformdb/chipseq/data/GSE68952/SRR2028278/mapping/SRR2028278.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028279/mapping/SRR2028279.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028280/mapping/SRR2028280.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028281/mapping/SRR2028281.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028282/mapping/SRR2028282.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028283/mapping/SRR2028283.srt.bam")
+
+#Estimate average fragment length
+param <- readParam(minq=10)
+max.delay <- 500
+dedup.off <- reform(param, dedup=F)
+x <- correlateReads(bam.files, max.delay, param=dedup.off)
+frag.len <- maximizeCcf(x) #Estimate of average frag length
+
+#Prepare blacklist
+blacklist <- read.table('/homes6/mquinn/chipseqRScripts/hg19-blacklist.v2.bed',
+                        header=FALSE,sep='\t',stringsAsFactors=F)
+blackpeaks <- GRanges(blacklist$V1,IRanges(blacklist$V2,blacklist$V3),group=blacklist$V4)
+
+#Start any blackpeaks at 1 instead of 0 as necessary (avoids errors later on)
+start0 <- which(start(blackpeaks) == 0)
+start(blackpeaks[start0]) <- 1
+param <- reform(param, discard=blackpeaks)
+
+#Restrict to those chromosomes considered in our analysis
+#param <- reform(param, restrict=levels(seqnames(regions)))
+
+#Get counts through csaw
+win.width <- 100
+data <- windowCounts(bam.files, ext=frag.len, width=win.width, param=param, spacing=99)
+
+#Check data
+head(assay(data))
+rowRanges(data) #positions corresponding to the row counts
+
+#Add an index metadata column
+elementMetadata(rowRanges(data))[["index"]] <- 1:nrow(data)
+
+######Peaks using MACS2 Peaksets########################
+
+#Grab peaksets downloaded from Cistrome DB for the GSE68952 neurologically normal 
+#(not Huntington's disease) control lines.
+peakset.files <- c("/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028278.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028279.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028280.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028281.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028282.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028283.bed")
+
+
+#Get peaksets into a list, lifting peaksets from hg38 to hg19
+path = system.file(package="liftOver", "extdata", "hg38ToHg19.over.chain")
+ch = import.chain(path)
+
+#temp = peakset.granges[[1]]
+#seqlevelsStyle(temp) = "UCSC"  # necessary
+#temp19 = liftOver(temp, ch)
+#temp19 = unlist(temp19)
+
+peakset.granges <- list()
+for(i in 1:length(peakset.files)){
+  temp = import(peakset.files[i])
+  seqlevelsStyle(temp) = "UCSC"  # necessary
+  temp19 = liftOver(temp, ch)
+  peakset.granges[[i]] = unlist(temp19)
+}
+
+#Join the various peaksets, filter by score, and reduce overlapping regions
+peakset.granges <- do.call("c", peakset.granges)
+#peakset.granges <- peakset.granges[which(peakset.granges$score > 10)]
+peakset.granges <- reduce(peakset.granges)
+
+#Remove those not recorded in the correct chromosomes - relevant if using different builds for
+#peaksets and read counts
+#peakset.granges <- peakset.granges[which(seqnames(peakset.granges) %in% seqnames(rowRanges(data))),]
+
+#Remove those not overlapping with read counts
+peakset.granges <- peakset.granges[unique(queryHits(findOverlaps(peakset.granges, rowRanges(data)))),]
+#seqlevels(peakset.granges) <- seqlevels(peakset.granges)[seqlevels(peakset.granges) %in% seqlevels(rowRanges(data))]
+
+#Remove those overlapping with blackpeaks
+peakset.granges <- peakset.granges[-unique(queryHits(findOverlaps(peakset.granges, blackpeaks))),]
+
+#Only retain peaks beyond a certain width, recommended to be larger than 1 window/bin.
+minWidth = 150
+peakset.granges <- peakset.granges[width(peakset.granges) > minWidth]
+length(peakset.granges)
+
+#Randomly sample 20,000 peaks from across the peaksets. Check that each one is entirely
+#contained within the count assay row ranges.
+set.seed(23)
+peakIndices <- sort(sample(1:length(peakset.granges), size=20000, replace=F))
+peaks <- peakset.granges[peakIndices,]
+
+length(unique(queryHits(findOverlaps(peaks, rowRanges(data)))))
+
+
+###################################
+
+
+######Peaks using Poor Man's peak caller########################
+#source("Peak Calling.R")
+#Call peaks, assumes sliding windows of width 100 bases that shift by 99 bases. 
+#peaks <- callPeaksApproximate(assay=assay(data), genomicInfo = rowRanges(data), fdrLevel=0.01, spacing=99)
+
+###################################
+
+#Simulate differential binding sites in the count assay
+#Group with value 1 indicates 0% downsampling, 
+#value 0.9 indicates 10% downsampling (e.g. newCounts <- 0.9*counts),
+#and so on. value of 0 indicates full 100% downsampling (e.g. counts - 1*counts)
+#Can do 0%, 10%, 20%, ..., 100% or 50%, 60%, ..., 100% etc.
+#groups <- seq(from=0.1, to=1, by=0.1)
+#groups <- rep(groups, each=1000)
+#groups <- seq(from=0.5, to=0.9, by=0.1)
+#groups <- rep(groups, each=2000)
+#groups <- seq(from=0.95, to = 0.75, by = 0.05) #May not have enough variation for DiffBind
+#groups <- rep(groups, each=2000)
+#groups <- rep(c(0.95, 0.90, 0.85, 0.80, 2/3), each=2000)
+#groups <- rep(c(0.975, 0.95, 0.2, 0.8, 0.6), each=2000)
+#groups <- c(groups, rep(0, 10000)) #False positives
+
+#Generate log2(treatment counts/reference count) values, mixture of two normals.
+#Null is just standard normal. Alternative is shifted normal
+set.seed(1)
+#logRatios <- c(rnorm(18000, 0, 1), rnorm(2000, -3, 0.5))
+sites <- c(rep("Non DB", 18000), rep("True DB", 2000))
+
+#Rounding to have multiple peaks with the same amount of downsampling
+#is helpful for the script that simulates read counts
+#logRatios <- round(logRatios, 2) 
+#groups <- 2^logRatios
+
+set.seed(1)
+reordering <- sample(1:length(sites), replace=F)
+#groups <-  groups[reordering]
+sites <- sites[reordering]
+
+#Append to peaks genomic ranges
+#elementMetadata(peaks)[["samplingFactor"]] <- groups
+elementMetadata(peaks)[["status"]] <- sites
+
+#Get simulated differential binding data. Noise range means instead of downsampling by value (e.g. 0.1, 0.2, etc.)
+#we downsample each bin by a randomly drawn unif(value - noiseRange/2, min(1,value + noiseRange/2))
+source("Simulated Data Differential Binding.R")
+set.seed(1)
+#simDat <- simulateDifferentialBinding(assay(data), rowRanges(data), peaks, groups, peakNoiseRange=0.2, backgroundNoiseRange=0)
+#simDat <- simulateDifferentialBinding(assay(data), rowRanges(data), peaks, groups, peakNoiseRange=0.2, backgroundNoiseRange=0)
+simDat <- simulateDifferentialBinding(assay=assay(data), genomicInfo=rowRanges(data), 
+                                      peaks=peaks, lfcMeanNonDB=0, lfcSDNonDB=1.25, lfcMeanTrueDB=1.25, 
+                                      lfcSDTrueDB=0.75, lfcMeanBackground=0, lfcSDBackground=0)
+
+#Make sure all entries nonnegative
+which(simDat < 0)
+
+save(data, simDat, peaks, file='data_peaks_simulated_DB_GSE68952.rda')
+
+
+##########csaw##########
+
+#Filtering by log-fold increase over background signal.
+#bin.size <- 10000L #Original: 6000 based on user manual
+#binned <- windowCounts(bam.files, bin=TRUE, width=bin.size, param=param)
+#filter.stat <- filterWindowsGlobal(data, background=binned)
+#keep <- filter.stat$filter > log2(2) #May want to vary this depending on experiment
+#sum(keep)
+
+#Filtering by peaksets
+keep <- unique(subjectHits(findOverlaps(peaks, rowRanges(data))))
+
+
+filtered.data <- data[keep,]
+
+
+#Normalization using TMM. Record normalizing factor for each sample/library.
+binned <- windowCounts(bam.files, bin=TRUE, width=10000, param=param)
+filtered.data <- normFactors(binned, se.out=filtered.data)
+filtered.data$norm.factors
+
+#Differential Expression
+#Create a DGEList object using the filtered data
+y <- asDGEList(filtered.data)
+
+#Insert the simulated data into the DGEList
+colIndices <- (ncol(assay(data))+1):(2*ncol(assay(data)))
+y$counts <- cbind(y$counts, simDat[keep, colIndices])
+colnames(y$counts)[colIndices] <- c("Sample 7", "Sample 8", "Sample 9", "Sample 10", "Sample 11", "Sample 12")
+
+y$samples <- rbind(y$samples, y$samples)
+rownames(y$samples)[colIndices] <- c("Sample7", "Sample8", "Sample9", "Sample10", "Sample11", "Sample12")
+
+y$samples$group <- c(rep(1,6), rep(2,6))
+
+#Design Matrix
+cell_line <- factor(c(1,2,3,4,5,6,1,2,3,4,5,6))
+status <- factor(c(rep("Control",6), rep("Simulated",6)))
+status <- relevel(status, ref=toString(unique(status)[1]))
+design <- model.matrix(~cell_line + status)
+
+#Estimate Dispersion
+library(edgeR)
+y <- estimateDisp(y, design)
+summary(y$trended.dispersion)
+
+#Fit model with edgeR
+fit <- glmQLFit(y, design, robust=TRUE)
+
+#Window-level differential binding
+results <- glmQLFTest(fit, contrast=c(0, 0, 0, 0, 0, 0, 1))
+head(results$table)
+
+rowData(filtered.data) <- cbind(rowData(filtered.data), results$table)
+
+
+#Region-level differential binding results
+#Merge windows within tol of one another
+merged <- mergeWindows(filtered.data, tol=100L) #Originally 1000
+merged$regions
+summary(width(merged$regions))
+
+tabcom <- combineTests(merged$ids, results$table)
+is.sig.region <- tabcom$FDR <= 0.05
+summary(is.sig.region)
+
+#Tabcom for "down" effects (since the simulated data are listed second)
+#See note below for up regions
+#downResults <- tabcom[tabcom$direction=="down",]
+#downRegions <- merged$regions[tabcom$direction=="down",]
+
+#Tabcom for "up" effects - it appears csaw is not very consistent in 
+#how it distinguishes "up" vs. "down" across data sets. For the BRG1
+#data, same set up required down results instead. Here, it's up results.
+csawResults <- tabcom
+csawRegions <- merged$regions
+
+#Save results
+save(csawRegions, csawResults, file='csaw_results_simulated_DB_GSE68952.rda')
+
+
+
+
+##########permutation test##########
+#Load in data, sample sheet, blacklist
+load('data_peaks_simulated_DB_GSE68952.rda')
+cell_line <- factor(c(1,2,3,4,5,6,1,2,3,4,5,6))
+status <- factor(c(rep("Control",6), rep("Simulated",6)))
+status <- relevel(status, ref=toString(unique(status)[1]))
+sampleSheet <- data.frame(cbind(cell_line, status))
+
+blacklist <- read.table('/homes6/mquinn/chipseqRScripts/hg19-blacklist.v2.bed',
+                        header=FALSE,sep='\t',stringsAsFactors=F)
+blacklist <- GRanges(blacklist$V1,IRanges(blacklist$V2,blacklist$V3),group=blacklist$V4)
+
+#Reformat experiment
+library(permBind)
+experiment <- formatExperiment(assay=simDat, rowRanges=rowRanges(data),
+                               sampleSheet=sampleSheet, blacklist=blacklist,
+                               expCondition = "status", block = "cell_line")
+
+#Get candidate regions
+experiment <- getRegions(experiment, lower=0.25, upper=0.75, thresholdType="percentile", 
+                         minWidth = median(width(rowRanges(experiment))) + 1, maxGap=600)
+
+#Log-transform counts
+experiment <- transformCounts(experiment)
+
+#Get permutations
+permutations <- getPermutations(experiment, permutationType = "balanced")
+#permutations <- getPermutations(experiment, permutationType = "all")
+
+#Run permutation test
+experiment <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = T, 
+                              numCores = 4, verbose = T)
+
+#Save results
+save(experiment, file='permutation_test_balanced_results_simulated_DB_GSE68952.rda')
+
+
+#Run again with all permutations
+permutations <- getPermutations(experiment, permutationType = "all")
+experiment <- permutationTest(experiment, permutations, effectType="two-sided", includeBetas = T, numCores = 4, verbose = T)
+save(experiment, file='permutation_test_all_results_simulated_DB_GSE68952.rda')
+
+
+##########DiffBind##########
+library(rtracklayer)
+library(DiffBind)
+#Taking the treatment TKO cell lines from GSE68952.
+#Here, the Sim files are just copies of the respective SRR run bams.
+bam.files <- c("/xplatformdb/chipseq/data/GSE68952/SRR2028278/mapping/SRR2028278.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028279/mapping/SRR2028279.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028280/mapping/SRR2028280.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028281/mapping/SRR2028281.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028282/mapping/SRR2028282.srt.bam",
+               "/xplatformdb/chipseq/data/GSE68952/SRR2028283/mapping/SRR2028283.srt.bam",
+               "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim1.srt.bam",
+               "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim2.srt.bam",
+               "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim3.srt.bam",
+               "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim4.srt.bam",
+               "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim5.srt.bam",
+               "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim6.srt.bam")
+
+#Grab peaksets downloaded from Cistrome DB for the GSE68952 TKO treatment lines
+#Here, the Sim1 and Sim2 files are just copies of the respective SRR peaks.
+peakset.files <- c("/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028278.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028279.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028280.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028281.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028282.bed",
+                   "/homes6/mquinn/chipseqRScripts/GSE68952_Peaksets/SRR2028283.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim1.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim2.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim3.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim4.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim5.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/Sim6.bed")
+
+#Convert the peaksets from hg38 to hg19, save and reload
+path = system.file(package="liftOver", "extdata", "hg38ToHg19.over.chain")
+ch = import.chain(path)
+
+for(i in 1:length(peakset.files)){
+  temp = import(peakset.files[i])
+  seqlevelsStyle(temp) = "UCSC"  # necessary
+  temp19 = liftOver(temp, ch)
+  temp19 = unlist(temp19)
+  
+  df <- data.frame(seqnames=seqnames(temp19),
+                   starts=start(temp19)-1, #bed files start at 0
+                   ends=end(temp19),
+                   strands=strand(temp19),
+                   score=temp19$score)
+  
+  write.table(df, file=paste0("/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_", i, "_GSE68952_hg19.bed"), quote=F, sep="\t", row.names=F, col.names=F)
+}
+
+#Grab hg19 peaksets now
+peakset.files <- c("/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_1_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_2_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_3_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_4_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_5_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_6_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_7_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_8_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_9_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_10_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_11_GSE68952_hg19.bed",
+                   "/homes6/mquinn/chipseqRScripts/temp_GSE68952/peaks_12_GSE68952_hg19.bed")
+
+samples <- data.frame(SampleID = c("C1", "C2", "C3", "C4", "C5", "C6", "Sim_1", "Sim_2", "Sim_3", "Sim_4", "Sim_5", "Sim_6"),
+                      Treatment = status,
+                      Factor = c(1,2,3,4,5,6,1,2,3,4,5,6),
+                      Replicate = c(1,1,1,1,1,1,1,1,1,1,1,1),
+                      bamReads = bam.files,
+                      Peaks = peakset.files,
+                      PeakCaller = rep("bed", length(bam.files)))
+
+samples <- dba(sampleSheet = samples)
+
+#Get counts. Score here indicates only using raw counts. Default is DBA_SCORE_TMM_MINUS_FULL,
+#which uses TMM normalized counts minus control and based on library size.
+samples <- dba.count(samples, bRemoveDuplicates = F, score=DBA_SCORE_READS)
+
+#Counts by peaks
+samples$binding
+
+#Counts as genomic ranges object
+counts <- dba.peakset(samples, bRetrieve=TRUE)
+elementMetadata(counts)[["index"]] <- 1:length(counts)
+
+#Downsample the peaks from DiffBind in a similar manner to those for csaw and the permutation test
+elementMetadata(counts)[["samplingFactor"]] <- NA
+peaksDiffBind <- counts[unique(queryHits(findOverlaps(counts, peaks)))]
+simCols <- sort(grep("Sim", colnames(samples$binding)))
+
+source("Temp adjustDiffBindCounts.R")
+
+samplesCopy <- samples
+
+#samples$peaks[[3]][32,][c("Score", "Reads")] <- c(0,0)
+#samples$peaks[[4]][32,][c("Score", "Reads")] <- c(0,0)
+#samples$peaks[[3]][32,][c("Reads")] <- c(0)
+#samples$peaks[[4]][32,][c("Reads")] <- c(0)
+#samples$peaks[[1]][32,][c("Score", "Reads")] 
+#samples$peaks[[2]][32,][c("Score", "Reads")] 
+
+
+#Obtain the genomic ranges version of the count assay again, now including
+#simulated downsampling
+counts <- dba.peakset(samples, bRetrieve=TRUE)
+elementMetadata(counts)["index"] <- 1:length(counts)
+
+#Restrict DiffBind object to only to the 20,000 of interest
+for(i in 1:length(samples$peaks)){
+  samples$peaks[[i]] <- samples$peaks[[i]][peaksDiffBind$index,]
+}
+counts <- counts[peaksDiffBind$index]
+samples$binding <- samples$binding[peaksDiffBind$index,]
+rownames(samples$binding) <- 1:nrow(samples$binding)
+samples$merged <- samples$merged[peaksDiffBind$index,]
+samples$totalMerged <- length(peaksDiffBind$index)
+
+#Contrast, accounting for blocking by cell line.
+samples <- dba.contrast(samples, categories=DBA_TREATMENT, minMembers = 2, block=DBA_FACTOR)
+
+#Differential binding analysis
+#filter rows with counts not at least at median bin sum summary(rowSums(samples$binding[,4:(3 + length(cellLines))]))
+#By default, does TMM normalization and uses DESEQ2
+#samples <- dba.analyze(samples, filter=median(rowSums(samples$binding[,4:(3 + length(cellLines))])), filterFun = sum)
+samples <- dba.analyze(samples, method=DBA_DESEQ2)
+
+#EdgeR seems to not work properly through DiffBind - just gives a 50/50 split between non-DB sites and DB sites at any given FDR.
+#samples <- dba.analyze(samples, method=DBA_EDGER_GLM)
+
+#samples$contrasts[[1]]$DESeq2
+
+#Get sites. Retrieve all sites, regardless of significance.
+samples.DB <- dba.report(samples, th=1, bUsePval=TRUE, bNormalized = F, bCounts = T, method=DBA_DESEQ2_BLOCK)
+#samples.DB <- dba.report(samples, th=1, bUsePval=TRUE, bNormalized = F, bCounts = T, method=DBA_EDGER_BLOCK)
+samples.DB <- sortSeqlevels(samples.DB)
+samples.DB <- sort(samples.DB)
+
+sum(samples.DB$FDR < 0.05)
+
+findOverlaps(peaks[peaks$samplingFactor > 0], samples.DB[samples.DB$FDR < 0.05])
+findOverlaps(peaks[peaks$samplingFactor == 0], samples.DB[samples.DB$FDR < 0.05])
+findOverlaps(peaks[peaks$samplingFactor > 0], samples.DB[samples.DB$FDR <= 1])
+
+#Save results
+save(diffBindRegions=samples.DB, file='diffBind_results_simulated_DB_GSE68952.rda')

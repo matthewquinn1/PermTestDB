@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1598731969875.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "F868570A",
+    "lastKnownWriteTime" : 1604040352,
+    "last_content_update" : 1604040352968,
+    "path" : "~/chipseqRScripts/PermTestDB/R/getRegions.R",
+    "project_path" : "R/getRegions.R",
+    "properties" : {
+        "cursorPosition" : "143,26",
+        "scrollLine" : "0",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 10,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

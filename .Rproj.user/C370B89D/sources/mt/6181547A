@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1595274497414.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "658474585",
+    "id" : "6181547A",
+    "lastKnownWriteTime" : 1604036011,
+    "last_content_update" : 1604036012029,
+    "path" : "~/chipseqRScripts/permBind Example.R",
+    "project_path" : "../permBind Example.R",
+    "properties" : {
+        "cursorPosition" : "79,11",
+        "scrollLine" : "72",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

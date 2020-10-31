@@ -1,0 +1,23 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1604183878109.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1661021654",
+    "id" : "CCC0019F",
+    "lastKnownWriteTime" : 1598462986,
+    "last_content_update" : 1598462986,
+    "path" : "~/chipseqRScripts/PermTestDB/R/checkPermutation.R",
+    "project_path" : "R/checkPermutation.R",
+    "properties" : {
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 13,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}
